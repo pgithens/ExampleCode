@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" >
+
+<script id="vertex-shader" type="x-shader/x-vertex">
+
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+
+uniform mat4 u_MvpMatrix;
+uniform mat4 u_MvMatrix;
+uniform mat3 u_MvMatrix_3by3;
+varying vec2 v_TexCoord;
+
+// these attributes will be used for lighting
+
+// object space normals computed from sphere
+// you need to transform it into eye space
+// and passing down the fragment shader for
+// per-fragment lighting in the eye space
+attribute vec3 a_Normal;
+
+// object space tangent and bitangent
+// you need to transform them into eye space
+// using u_MvMatrix_3by3
+// and use them to create TBN frame
+// (along with eye-space normal)
+attribute vec3 a_Tangent;
+attribute vec3 a_Bitangent;
+
+varying vec3 v_Test; // dummy
+varying vec3 v_Le, v_Ee, v_Ne;
+varying vec3 v_LightDirectionTS;
+varying vec3 v_EyeDirectionTS;
+
+uniform bool u_useBump;
+uniform bool u_useLight;
+uniform bool u_useTexture;
+
+void
+main()
+{
+
+    if(u_useTexture){
+      gl_Position = u_MvpMatrix * vec4(a_Position, 1.0);
+      v_TexCoord = a_TexCoord;
+
+      // dummy code
+
+      vec3 vertexPositionES = (u_MvMatrix * vec4(a_Position, 1.0)).xyz;
+      vec3 vertexNormalES = u_MvMatrix_3by3 * a_Normal;
+      v_Test = normalize(a_Tangent);
+      v_Test = normalize(a_Bitangent);
+      v_Test = normalize(a_Normal);
+
+    }
+
+    if(u_useLight){
+      v_TexCoord = a_TexCoord;
+
+      vec3 vertexPositionES = (u_MvMatrix * vec4(a_Position, 1.0)).xyz;   // vertex position
+      vec3 lightPositionES = vec3(0.0, 500.0, 0.0); // light position
+
+      v_Ne = normalize(u_MvMatrix_3by3 * a_Normal); //vertex normal
+      v_Le = normalize(lightPositionES - vertexPositionES); //light direction in eye space
+      v_Ee = -normalize(vertexPositionES); // eye direction in eye space
+      gl_Position = u_MvpMatrix * vec4( a_Position, 1.0);
+    }
+
+   if (u_useBump){
+      v_TexCoord = a_TexCoord;
+
+      vec3 vertexPositionES = (u_MvMatrix * vec4(a_Position, 1.0)).xyz;   // vertex position
+      vec3 lightPositionES = vec3(0.0, 500.0, 0.0); // light position
+
+      vec3 vertexTangentES = normalize(u_MvMatrix_3by3 * a_Tangent);
+      vec3 vertexBitangentES = normalize(u_MvMatrix_3by3 * a_Bitangent);
+      vec3 vertexNormalES = normalize(u_MvMatrix_3by3 * a_Normal);
+
+      mat3 TBN = mat3(
+        vec3(vertexTangentES.x, vertexBitangentES.x, vertexNormalES.x),
+        vec3(vertexTangentES.y, vertexBitangentES.y, vertexNormalES.y),
+        vec3(vertexTangentES.z, vertexBitangentES.z, vertexNormalES.z)
+      );
+
+      vec3 lightDirectionES = normalize(lightPositionES - vertexPositionES);
+      vec3 eyeDirectionES = -normalize(vertexPositionES);
+
+      v_LightDirectionTS = TBN * lightDirectionES;
+      v_EyeDirectionTS = TBN * eyeDirectionES;
+
+      gl_Position = u_MvpMatrix * vec4( a_Position, 1.0);
+   }
+
+}
+</script>
+
+<script id="fragment-shader" type="x-shader/x-fragment">
+
+precision mediump float;
+
+// orange texture
+uniform sampler2D u_TextureSampler;
+
+// orange lighting
+uniform vec4 u_ambientProduct;
+uniform vec4 u_diffuseProduct;
+uniform vec4 u_specularProduct;
+
+uniform float u_shininess;
+
+// orange normal map
+// use texture lookup to get tangent space normal
+uniform sampler2D u_TextureSamplerNormal;
+
+varying vec2 v_TexCoord;
+
+varying vec3 v_Test;
+
+varying vec3 v_Ne, v_Ee, v_Le;
+
+varying vec3 v_LightDirectionTS;
+varying vec3 v_EyeDirectionTS;
+
+uniform bool u_useBump;
+uniform bool u_useLight;
+uniform bool u_useTexture;
+
+void
+main()
+{
+
+  if(u_useTexture){
+    vec3 textureColor;
+
+    vec3 test = normalize(v_Test);
+    textureColor = texture2D(u_TextureSamplerNormal, v_TexCoord).rgb;
+
+    textureColor = texture2D(u_TextureSampler, v_TexCoord).rgb;
+    gl_FragColor = vec4(textureColor, 1.0);
+  }
+
+  if(u_useLight){
+    vec4 fColor;
+
+    vec4 textureColor;
+
+    vec3 NN, NL, NE;
+    NN = normalize(v_Ne);
+    NL = normalize(v_Le);
+    NE = normalize(v_Ee);
+
+    vec3 NH = normalize( NL + NE );
+    vec4 ambient = u_ambientProduct;
+
+    float Kd = max( dot(NL, NN), 0.0 );
+    vec4 diffuse = Kd*u_diffuseProduct;
+
+    float Ks = pow( max(dot(NN, NH), 0.0), u_shininess );
+    vec4 specular = Ks * u_specularProduct;
+
+    if( dot(NL, NN) < 0.0 )
+      specular = vec4(0.0, 0.0, 0.0, 1.0);
+
+    fColor = ambient + diffuse + specular;
+    fColor.a = 1.0;
+
+    textureColor = texture2D(u_TextureSampler, v_TexCoord);
+    textureColor.a = 1.0;
+
+    gl_FragColor = vec4(textureColor.rgb*fColor.rgb, textureColor.a);
+
+  }
+
+  if (u_useBump){
+    vec4 fColor;
+
+    vec4 textureColor;
+    vec3 textureNormal;
+
+    vec3 NN, NL, NE;
+
+    textureNormal = texture2D(u_TextureSamplerNormal, v_TexCoord).xyz;
+    textureNormal.x = (2.0*textureNormal.x - 1.0);
+    textureNormal.y = (2.0*textureNormal.y - 1.0);
+    textureNormal.z = (2.0*textureNormal.z - 1.0);
+
+    NN = normalize(textureNormal);
+    NL = normalize(v_LightDirectionTS);
+    NE = normalize(v_EyeDirectionTS);
+
+    vec3 NH = normalize( NL + NE );
+    vec4 ambient = u_ambientProduct;
+
+    float Kd = max( dot(NL, NN), 0.0 );
+    vec4 diffuse = Kd*u_diffuseProduct;
+
+    float Ks = pow( max(dot(NN, NH), 0.0), u_shininess );
+    vec4 specular = Ks * u_specularProduct;
+
+    if( dot(NL, NN) < 0.0 )
+      specular = vec4(0.0, 0.0, 0.0, 1.0);
+
+    fColor = ambient + diffuse + specular;
+    fColor.a = 1.0;
+
+    textureColor = texture2D(u_TextureSampler, v_TexCoord);
+    textureColor.a = 1.0;
+
+    gl_FragColor = vec4(textureColor.rgb*fColor.rgb, textureColor.a);
+
+  }
+
+}
+</script>
+
+<script type="text/javascript" src="../Common/webgl-utils.js"></script>
+<script type="text/javascript" src="../Common/initShaders.js"></script>
+<script type="text/javascript" src="../Common/MV.js"></script>
+<script type="text/javascript" src="orange-objParser.js"></script>
+<script type="text/javascript" src="orange-objViewer-template.js"></script>
+</head>
+
+<body>
+<canvas id="gl-canvas" width="512" height="512">
+Oops ... your browser doesn't support the HTML5 canvas element
+</canvas>
+
+<br>
+
+<form>
+  <input type="radio" name="function" id="text">Texture
+  <input type="radio" name="function" id="light">Texture + Light
+  <input type="radio" name="function" id="bump" checked>Texture + Light + Normal Map
+</form>
+
+<br>
+
+</body>
+</html>
